@@ -2,5 +2,16 @@
 name = "obsidian2epub"
 version = "0.1.0"
 edition = "2024"
+description = "Convert an Obsidian Vault to a standard EPUB e-book"
+license = "MIT"
 
 [dependencies]
+clap = { version = "4", features = ["derive"] }
+walkdir = "2"
+regex = "1"
+pulldown-cmark = "0.12"
+epub-builder = "0.7"
+anyhow = "1"
+
+[dev-dependencies]
+tempfile = "3"
