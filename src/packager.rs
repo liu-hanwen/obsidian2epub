@@ -10,7 +10,8 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
 use epub_builder::{EpubBuilder, EpubContent, ReferenceType, ZipLibrary};
-use pulldown_cmark::{html, Options, Parser};
+use latex2mathml::{latex_to_mathml, DisplayStyle};
+use pulldown_cmark::{html, Event, Options, Parser};
 use walkdir::WalkDir;
 
 use crate::metadata::strip_frontmatter;
@@ -84,7 +85,18 @@ pub fn build_epub(
         let xhtml_rel = rel_path.with_extension("xhtml");
         let xhtml_str = path_to_epub_str(&xhtml_rel);
 
-        let mut content = EpubContent::new(&xhtml_str, xhtml.as_bytes()).title(title.as_str());
+        // Depth = number of parent directory components (root file → 0 → level 1,
+        // one folder deep → 1 → level 2, etc.).
+        let depth = rel_path
+            .components()
+            .filter(|c| matches!(c, Component::Normal(_)))
+            .count()
+            .saturating_sub(1); // subtract 1 for the file component itself
+        let toc_level = (depth as i32) + 1;
+
+        let mut content = EpubContent::new(&xhtml_str, xhtml.as_bytes())
+            .title(title.as_str())
+            .level(toc_level);
         if first_text {
             content = content.reftype(ReferenceType::Text);
             first_text = false;
@@ -114,15 +126,43 @@ pub fn build_epub(
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/// Render CommonMark Markdown to an HTML fragment string.
+/// Convert a LaTeX formula string to a MathML element string.
+///
+/// On conversion failure the raw LaTeX is returned as a `<code>` (inline)
+/// or `<pre><code>` (block) fallback so the EPUB is never broken by
+/// unsupported syntax.
+fn math_to_mathml(latex: &str, display: DisplayStyle) -> String {
+    latex_to_mathml(latex, display).unwrap_or_else(|_| match display {
+        DisplayStyle::Inline => format!("<code>{}</code>", xml_escape(latex)),
+        DisplayStyle::Block => format!("<pre><code>{}</code></pre>", xml_escape(latex)),
+    })
+}
+
+/// Render CommonMark Markdown (with math extensions) to an HTML fragment string.
+/// LaTeX formulas (`$…$` inline, `$$…$$` display) are converted to MathML.
 fn markdown_to_html(markdown: &str) -> String {
     let mut opts = Options::empty();
     opts.insert(Options::ENABLE_TABLES);
     opts.insert(Options::ENABLE_STRIKETHROUGH);
     opts.insert(Options::ENABLE_TASKLISTS);
+    opts.insert(Options::ENABLE_MATH);
     let parser = Parser::new_ext(markdown, opts);
+
+    // Convert InlineMath / DisplayMath events to MathML; pass everything else through.
+    let events = parser.map(|event| -> Event<'static> {
+        match event {
+            Event::InlineMath(latex) => {
+                Event::Html(math_to_mathml(latex.as_ref(), DisplayStyle::Inline).into())
+            }
+            Event::DisplayMath(latex) => {
+                Event::Html(math_to_mathml(latex.as_ref(), DisplayStyle::Block).into())
+            }
+            e => e.into_static(),
+        }
+    });
+
     let mut out = String::new();
-    html::push_html(&mut out, parser);
+    html::push_html(&mut out, events);
     out
 }
 
@@ -238,5 +278,23 @@ mod tests {
     #[test]
     fn xml_escape_special_chars() {
         assert_eq!(xml_escape("a & b < c > d \"e\""), "a &amp; b &lt; c &gt; d &quot;e&quot;");
+    }
+
+    #[test]
+    fn markdown_to_html_inline_math_produces_mathml() {
+        let html = markdown_to_html("Inline: $E = mc^2$");
+        assert!(
+            html.contains("<math"),
+            "inline math should produce a <math> element; got: {html}"
+        );
+    }
+
+    #[test]
+    fn markdown_to_html_display_math_produces_mathml() {
+        let html = markdown_to_html("$$x = 1$$");
+        assert!(
+            html.contains("<math"),
+            "display math should produce a <math> element; got: {html}"
+        );
     }
 }

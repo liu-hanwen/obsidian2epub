@@ -12,6 +12,7 @@ regex = "1"
 pulldown-cmark = "0.12"
 epub-builder = "0.7"
 anyhow = "1"
+latex2mathml = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
