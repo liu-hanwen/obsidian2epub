@@ -10,7 +10,7 @@ use tempfile::TempDir;
 ///
 /// ```text
 /// mock_vault/
-/// ├── index.md          (contains [[nested/note_a|Go to A]] and ![[pic.png]])
+/// ├── index.md          (contains [[note_a|Go to A]], ![[pic.png]], and LaTeX math)
 /// ├── nested/
 /// │   └── note_a.md     (contains YAML frontmatter and back-link [[index]])
 /// └── assets/
@@ -22,7 +22,8 @@ fn create_mock_vault(root: &Path) {
 
     fs::write(
         root.join("index.md"),
-        "# Index\n\nSee [[note_a|Go to A]] and the image below.\n\n![[pic.png]]\n",
+        "# Index\n\nSee [[note_a|Go to A]] and the image below.\n\n![[pic.png]]\n\
+        \nInline math: $E = mc^2$\n\nDisplay math:\n\n$$x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$$\n",
     )
     .unwrap();
 
@@ -121,4 +122,34 @@ fn epub_is_a_zip_file() {
     let bytes = fs::read(&epub_path).unwrap();
     assert!(bytes.len() >= 4);
     assert_eq!(&bytes[..4], b"PK\x03\x04", "EPUB should start with PK ZIP signature");
+}
+
+/// Verify that a vault with LaTeX math produces a valid EPUB (build must not fail).
+#[test]
+fn epub_with_latex_math() {
+    let vault_dir = TempDir::new().unwrap();
+    // index.md already contains LaTeX in create_mock_vault.
+    create_mock_vault(vault_dir.path());
+
+    let out_dir = TempDir::new().unwrap();
+    let epub_path = out_dir.path().join("math.epub");
+
+    let status = Command::new(binary_path())
+        .args([
+            "--source",
+            vault_dir.path().to_str().unwrap(),
+            "--output",
+            epub_path.to_str().unwrap(),
+            "--title",
+            "Math Book",
+        ])
+        .status()
+        .expect("failed to run obsidian2epub");
+
+    assert!(status.success(), "CLI exited with non-zero status for LaTeX vault");
+    assert!(epub_path.exists(), "EPUB file was not created for LaTeX vault");
+    assert!(
+        fs::metadata(&epub_path).unwrap().len() > 0,
+        "EPUB file should not be empty"
+    );
 }
